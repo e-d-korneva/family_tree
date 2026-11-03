@@ -242,7 +242,6 @@ body {
     background: #8a9a82 !important;
     color: #FAFAF7 !important;
 }
-
 .btn-danger:hover {
     background: #6d7d65 !important;
     color: #FAFAF7 !important;
@@ -582,3 +581,8 @@ body { background: #F2F5EF; font-family: 'Segoe UI', sans-serif; color: #2d3a2e;
 .modal-header, .modal-footer { background: #F2F5EF; border-color: #C7D3C1; }
 .form-control, .form-select { border-color: #C7D3C1; background: #FAFAF7; }
 .form-control:focus, .form-select:focus { border-color: #A8B5A0; box-shadow: 0 0 0 0.2rem rgba(168,181,160,0.25); }
+
+/* ====== МЕДИАТЕКА ====== */
+.media-card {
+    animation: fadeIn 0.4s ease;
+}

@@ -1,10 +1,14 @@
 <?php
-require_once '../includes/functions.php';
+require_once __DIR__ . '/../includes/functions.php';
 
 $query = trim($_GET['q'] ?? '');
 if (strlen($query) < 2) {
     jsonResponse([]);
 }
+
+// ИСПРАВЛЕНО: экранирование SQL-wildcards
+$escaped = str_replace(['\\', '%', '_'], ['\\\\', '\%', '\_'], $query);
+$searchTerm = "%$escaped%";
 
 $stmt = $pdo->prepare("
     SELECT id, first_name, middle_name, last_name, maiden_name, birth_date, death_date 
@@ -13,7 +17,6 @@ $stmt = $pdo->prepare("
     ORDER BY last_name, first_name 
     LIMIT 20
 ");
-$searchTerm = "%$query%";
 $stmt->execute([$searchTerm, $searchTerm, $searchTerm, $searchTerm]);
 $results = $stmt->fetchAll();
 

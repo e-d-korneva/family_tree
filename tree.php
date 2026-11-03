@@ -156,9 +156,9 @@ if ($action === 'get') {
     <div class="container-fluid px-3">
         <a class="navbar-brand" href="index.php">Семейное древо</a>
         <div class="d-flex gap-2">
+            <a href="index.php" class="btn btn-outline-light btn-sm">Люди</a>
             <a href="event.php" class="btn btn-outline-light btn-sm">События</a>
             <a href="media.php" class="btn btn-outline-light btn-sm">Медиатека</a>
-            <a href="index.php" class="btn btn-outline-light btn-sm"><- К Списку</a>
             <div class="position-relative">
                 <input type="text" id="globalSearch" class="form-control form-control-sm" placeholder="Поиск по ФИО..." style="width: 250px;" autocomplete="off">
                 <div id="searchResults" class="dropdown-menu show" style="display: none; position: absolute; top: 100%; left: 0; width: 100%; z-index: 1050; max-height: 300px; overflow-y: auto;"></div>
@@ -192,7 +192,9 @@ if ($action === 'get') {
                     <div class="tab-pane fade show active" id="tab-main">
                         <div class="row">
                             <div class="col-md-3 text-center">
-                                <div id="pm_photo" class="placeholder-photo mb-2"></div>
+                                <div id="pm_photo_container" class="text-center mb-2">
+                                    <div id="pm_photo" class="placeholder-photo mb-2"> 👤 </div>
+                                </div>
                                 <div id="pm_status_badge" class="badge"></div>
                             </div>
                             <div class="col-md-9">
@@ -518,36 +520,52 @@ document.getElementById('addRelForm').addEventListener('submit', async function(
     const fd = new FormData(this);
     const type = document.getElementById('rel_type').value;
     
-    // Преобразуем понятные пользователю выборы в флаги для БД
+    const currentId = parseInt(fd.get('from_person_id'));
+    const selectedId = parseInt(fd.get('to_person_id'));
+    
+    // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: правильное направление связи для БД
     if (type === 'parent') {
-        const pType = document.getElementById('parent_type').value;
-        fd.set('is_step', (pType === 'step') ? '1' : '0');
-        fd.set('shared_parent', (pType === 'godparent') ? 'godparent' : 'both');
+        // Добавляем РОДИТЕЛЯ: Выбранный (from) -> Текущий (to)
+        fd.set('from_person_id', selectedId);
+        fd.set('to_person_id', currentId);
+        fd.set('relation_type', 'parent');
     } else if (type === 'child') {
-        const cType = document.getElementById('child_type').value;
-        fd.set('is_step', (cType === 'step') ? '1' : '0');
-        fd.set('shared_parent', (cType === 'godchild') ? 'godchild' : 'both');
+        // Добавляем РЕБЁНКА: Текущий (from) -> Выбранный (to)
+        fd.set('from_person_id', currentId);
+        fd.set('to_person_id', selectedId);
+        fd.set('relation_type', 'parent');
     } else if (type === 'spouse') {
-        const status = document.getElementById('spouse_status').value;
-        fd.set('is_widowed', (status === 'widowed') ? '1' : '0');
-        if (status !== 'divorced') {
-            fd.set('divorce_date', ''); // Очищаем дату развода, если не в разводе
-        }
+        fd.set('from_person_id', currentId);
+        fd.set('to_person_id', selectedId);
+        fd.set('relation_type', 'spouse');
     } else if (type === 'sibling') {
-        // Для братьев/сестёр shared_parent уже выбран в select (both, father, mother, none)
+        fd.set('from_person_id', currentId);
+        fd.set('to_person_id', selectedId);
         fd.set('relation_type', 'sibling');
     }
     
-    // Гарантируем наличие чекбоксов в FormData (если не отмечены, их там не будет)
+    // Преобразуем подтипы
+    if (type === 'parent') {
+        const pType = document.getElementById('parent_type').value;
+        fd.set('shared_parent', pType === 'step' ? 'none' : (pType === 'godparent' ? 'godparent' : 'both'));
+        fd.set('is_step', pType === 'step' ? '1' : '0');
+    } else if (type === 'child') {
+        const cType = document.getElementById('child_type').value;
+        fd.set('shared_parent', cType === 'step' ? 'none' : (cType === 'godchild' ? 'godchild' : 'both'));
+        fd.set('is_step', cType === 'step' ? '1' : '0');
+    } else if (type === 'spouse') {
+        const status = document.getElementById('spouse_status').value;
+        fd.set('is_widowed', status === 'widowed' ? '1' : '0');
+        if (status !== 'divorced') fd.set('divorce_date', '');
+    }
+    
     if (!fd.has('is_adopted')) fd.set('is_adopted', '0');
     
     try {
         const res = await fetch('api/person.php', { method: 'POST', body: fd, cache: 'no-store' });
         const data = await res.json();
-        
         if (data.success) {
             bootstrap.Modal.getInstance(document.getElementById('addRelModal')).hide();
-            // Перезагружаем страницу или обновляем модальное окно человека
             if (typeof showPersonModal === 'function' && currentPersonId) {
                 await showPersonModal(currentPersonId);
             } else {

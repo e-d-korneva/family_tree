@@ -162,9 +162,15 @@ document.addEventListener('DOMContentLoaded', function () {
         document.getElementById('pm_birthplace').textContent = p.birth_place || '—';
         document.getElementById('pm_deathplace').textContent = p.death_place || '—';
 
-        const photoEl = document.getElementById('pm_photo');
-        if (p.photo) { photoEl.outerHTML = `<img id="pm_photo" src="${p.photo}" class="img-fluid rounded mb-2" style="max-height:200px">`; } 
-        else { if (!document.getElementById('pm_photo')) photoEl.insertAdjacentHTML('afterend', `<div id="pm_photo" class="placeholder-photo mb-2">👤</div>`); }
+        // Всегда пересоздаём содержимое контейнера — это устраняет дублирование
+        const photoContainer = document.getElementById('pm_photo_container');
+        if (photoContainer) {
+            if (p.photo) {
+                photoContainer.innerHTML = `<img id="pm_photo" src="${p.photo}" class="img-fluid rounded mb-2" style="max-height:200px">`;
+            } else {
+                photoContainer.innerHTML = `<div id="pm_photo" class="placeholder-photo mb-2"> 👤 </div>`;
+            }
+        }
 
         const statusMap = { alive: { text: '🟢 Живой', cls: 'bg-success' }, deceased: { text: '⚫ Умерший', cls: 'bg-secondary' }, unknown: { text: '⚪ Неизвестно', cls: 'bg-warning text-dark' } };
         const st = statusMap[p.status] || statusMap.unknown;

@@ -44,44 +44,53 @@ function getRelatives(PDO $pdo, int $personId): array {
     $res = ['parents' => [], 'spouses' => [], 'children' => [], 'siblings' => []];
     
     // Родители
-    $stmt = $pdo->prepare("SELECT p.*, r.id as rel_id, r.relation_type, r.shared_parent, r.is_adopted, r.is_step, r.marriage_date, r.divorce_date, r.is_widowed 
-                           FROM persons p JOIN relationships r ON r.from_person_id = p.id 
+    $stmt = $pdo->prepare("SELECT p.*, r.id as rel_id, r.relation_type, r.shared_parent, r.is_adopted, r.is_step, r.marriage_date, r.divorce_date, r.is_widowed  
+                           FROM persons p JOIN relationships r ON r.from_person_id = p.id  
                            WHERE r.to_person_id = ? AND r.relation_type = 'parent'");
     $stmt->execute([$personId]); 
     $res['parents'] = $stmt->fetchAll();
-
+    
     // Супруги
-    $stmt = $pdo->prepare("SELECT p.*, r.id as rel_id, r.relation_type, r.marriage_date, r.divorce_date, r.is_step, r.is_widowed 
+    $stmt = $pdo->prepare("SELECT p.*, r.id as rel_id, r.relation_type, r.marriage_date, r.divorce_date, r.is_step, r.is_widowed  
                            FROM persons p JOIN relationships r ON ((r.from_person_id = p.id AND r.to_person_id = ?) OR (r.to_person_id = p.id AND r.from_person_id = ?)) 
                            WHERE r.relation_type = 'spouse'");
     $stmt->execute([$personId, $personId]); 
     $res['spouses'] = $stmt->fetchAll();
-
+    
     // Дети
-    $stmt = $pdo->prepare("SELECT p.*, r.id as rel_id, r.relation_type, r.shared_parent, r.is_adopted, r.is_step, r.marriage_date, r.divorce_date, r.is_widowed 
-                           FROM persons p JOIN relationships r ON r.to_person_id = p.id 
+    $stmt = $pdo->prepare("SELECT p.*, r.id as rel_id, r.relation_type, r.shared_parent, r.is_adopted, r.is_step, r.marriage_date, r.divorce_date, r.is_widowed  
+                           FROM persons p JOIN relationships r ON r.to_person_id = p.id  
                            WHERE r.from_person_id = ? AND r.relation_type = 'parent'");
     $stmt->execute([$personId]); 
     $res['children'] = $stmt->fetchAll();
-
-    // Братья и сёстры
-    $stmt = $pdo->prepare("SELECT DISTINCT p.*, r1.id as rel_id, r1.relation_type, r1.shared_parent, r1.is_adopted, r1.is_step 
-                           FROM persons p 
-                           JOIN relationships r1 ON r1.to_person_id = p.id AND r1.relation_type = 'parent' 
-                           JOIN relationships r2 ON r2.from_person_id = r1.from_person_id AND r2.to_person_id = ? AND r2.relation_type = 'parent' 
-                           WHERE p.id != ?");
-    $stmt->execute([$personId, $personId]); 
+    
+    // Братья и сёстры — через общих родителей ИЛИ через прямую связь sibling
+    $stmt = $pdo->prepare("
+        SELECT DISTINCT p.*, COALESCE(r_direct.id, r1.id) as rel_id, 
+               COALESCE(r_direct.relation_type, r1.relation_type) as relation_type,
+               COALESCE(r_direct.shared_parent, r1.shared_parent) as shared_parent,
+               COALESCE(r_direct.is_adopted, r1.is_adopted) as is_adopted,
+               COALESCE(r_direct.is_step, r1.is_step) as is_step
+        FROM persons p
+        LEFT JOIN relationships r_direct ON (
+            (r_direct.from_person_id = p.id AND r_direct.to_person_id = ? AND r_direct.relation_type = 'sibling')
+            OR (r_direct.to_person_id = p.id AND r_direct.from_person_id = ? AND r_direct.relation_type = 'sibling')
+        )
+        LEFT JOIN relationships r1 ON r1.to_person_id = p.id AND r1.relation_type = 'parent'
+        LEFT JOIN relationships r2 ON r2.from_person_id = r1.from_person_id AND r2.to_person_id = ? AND r2.relation_type = 'parent'
+        WHERE p.id != ? AND (r_direct.id IS NOT NULL OR r2.id IS NOT NULL)
+    ");
+    $stmt->execute([$personId, $personId, $personId, $personId]);
     $res['siblings'] = $stmt->fetchAll();
     
     return $res;
 }
 
 function getEvents(PDO $pdo, int $personId): array {
-    // GROUP BY e.id предотвращает дублирование событий, если у человека несколько ролей
     $stmt = $pdo->prepare("SELECT e.*, ep.role FROM events e 
-                           JOIN event_participants ep ON e.id = ep.event_id 
+                           JOIN event_participants ep ON e.id = ep.event_id  
                            WHERE ep.person_id = ? 
-                           GROUP BY e.id 
+                           GROUP BY e.id  
                            ORDER BY e.event_date DESC");
     $stmt->execute([$personId]); 
     return $stmt->fetchAll();
@@ -118,8 +127,8 @@ function findPath(PDO $pdo, int $p1, int $p2): ?array {
             'shared' => $r['shared_parent'], 'step' => $r['is_step'], 'adopted' => $r['is_adopted'],
             'divorced' => $r['divorce_date'], 'widowed' => $r['is_widowed']
         ];
-        // Обратное направление
-        $rev = $r['relation_type'] === 'parent' ? 'child' : ($r['relation_type'] === 'child' ? 'parent' : 'spouse');
+        // Обратное направление — ИСПРАВЛЕНО: parent остаётся parent при движении вверх
+        $rev = $r['relation_type'] === 'parent' ? 'parent' : ($r['relation_type'] === 'child' ? 'child' : 'spouse');
         $adj[$r['to_person_id']][] = [
             'to' => $r['from_person_id'], 'type' => $rev, 'id' => $r['id'], 
             'shared' => $r['shared_parent'], 'step' => $r['is_step'], 'adopted' => $r['is_adopted'],
@@ -134,7 +143,6 @@ function findPath(PDO $pdo, int $p1, int $p2): ?array {
         foreach ($adj[$cur] ?? [] as $link) {
             if (!isset($visited[$link['to']])) {
                 $visited[$link['to']] = true;
-                // Формируем строку: type|shared|step|adopted|divorced|widowed
                 $typeStr = $link['type'] . '|' . $link['shared'] . '|' . $link['step'] . '|' . $link['adopted'] . '|' . ($link['divorced'] ? '1' : '0') . '|' . $link['widowed'];
                 $queue[] = [$link['to'], array_merge($path, [$cur]), array_merge($edges, [$link['id']]), array_merge($types, [$typeStr])];
             }
@@ -149,7 +157,6 @@ function determineKinship(PDO $pdo, array $path, array $types): string {
     $stmt = $pdo->prepare("SELECT gender FROM persons WHERE id = ?");
     $stmt->execute([$p2]); $g2 = $stmt->fetchColumn() ?: 'U';
     $stmt->execute([$p1]); $g1 = $stmt->fetchColumn() ?: 'U';
-
     $up = 0; $down = 0; $spouse = 0; $step = false; $adopted = false; $shared = 'both'; $divorced = false; $widowed = false;
     
     foreach ($types as $t) {
@@ -164,7 +171,7 @@ function determineKinship(PDO $pdo, array $path, array $types): string {
         if ($parts[4] == '1') $divorced = true;
         if ($parts[5] == '1') $widowed = true;
     }
-
+    
     // 1. Прямая линия вверх (Родители, Деды)
     if ($up > 0 && $down === 0 && $spouse === 0) {
         if ($step) return $g2 === 'M' ? 'Отчим' : ($g2 === 'F' ? 'Мачеха' : 'Отчим/Мачеха');
@@ -190,17 +197,17 @@ function determineKinship(PDO $pdo, array $path, array $types): string {
         if ($widowed) return $g2 === 'M' ? 'Покойный муж' : ($g2 === 'F' ? 'Покойная жена' : 'Покойный супруг(а)');
         return $g2 === 'M' ? 'Муж' : ($g2 === 'F' ? 'Жена' : 'Супруг(а)');
     }
-
+    
     // 4. Братья и сёстры
     if ($up === 1 && $down === 1 && $spouse === 0) {
         $prefix = '';
-        if ($adopted) $prefix = 'Названый ';
+        if ($adopted) $prefix = 'Назаный ';
         elseif ($step || $shared === 'none') $prefix = 'Сводный ';
         elseif ($shared === 'father') $prefix = 'Единокровный ';
         elseif ($shared === 'mother') $prefix = 'Единоутробный ';
         return $prefix . ($g2 === 'M' ? 'брат' : ($g2 === 'F' ? 'сестра' : 'брат/сестра'));
     }
-
+    
     // 5. Дядя/Тётя, Племянник/Племянница
     if ($up === 2 && $down === 1 && $spouse === 0) return $g2 === 'M' ? 'Дядя' : ($g2 === 'F' ? 'Тётя' : 'Дядя/Тётя');
     if ($up === 1 && $down === 2 && $spouse === 0) return $g2 === 'M' ? 'Племянник' : ($g2 === 'F' ? 'Племянница' : 'Племянник/Племянница');
@@ -209,7 +216,7 @@ function determineKinship(PDO $pdo, array $path, array $types): string {
     if ($up === 2 && $down === 2 && $spouse === 0) return $g2 === 'M' ? 'Двоюродный брат' : ($g2 === 'F' ? 'Двоюродная сестра' : 'Двоюродный брат/сестра');
     if ($up === 3 && $down === 2 && $spouse === 0) return $g2 === 'M' ? 'Двоюродный дядя' : ($g2 === 'F' ? 'Двоюродная тётя' : 'Двоюродный дядя/тётя');
     if ($up === 3 && $down === 3 && $spouse === 0) return $g2 === 'M' ? 'Троюродный брат' : ($g2 === 'F' ? 'Троюродная сестра' : 'Троюродный брат/сестра');
-
+    
     // 7. Свойство (по браку)
     if ($up === 1 && $down === 0 && $spouse === 1) {
         $stmt->execute([$path[1]]); $spouseG = $stmt->fetchColumn();
@@ -223,7 +230,7 @@ function determineKinship(PDO $pdo, array $path, array $types): string {
         return $g2 === 'M' ? 'Шурин' : ($g2 === 'F' ? 'Свояченица' : 'Шурин/Свояченица');
     }
     if ($up === 1 && $down === 1 && $spouse === 2) return $g2 === 'M' ? 'Сват' : ($g2 === 'F' ? 'Сватья' : 'Сват/Сватья');
-
+    
     return "Родственник (связь через " . ($up + $down + $spouse) . " шагов)";
 }
 
@@ -252,7 +259,7 @@ function getRelationshipBadge(array $rel): string {
 
 function processFlexibleDate(string $date, string $accuracy): string {
     $date = trim($date); if (!$date) return '';
-    $prefix = match($accuracy) { 'approx' => 'около ', 'before' => 'до ', 'after' => 'после ', 'between' => 'между ', default => '' };
+    $prefix = match ($accuracy) { 'approx' => 'около ', 'before' => 'до ', 'after' => 'после ', 'between' => 'между ', default => '' };
     return $prefix . $date;
 }
 
@@ -278,7 +285,40 @@ function createRelations(PDO $pdo, int $fromId, array $toList, string $type): vo
     foreach ($toList as $toId) { $toId = (int)$toId; if ($toId > 0) $stmt->execute([$fromId, $toId, $type]); }
 }
 
+// ИСПРАВЛЕНО: правильное направление связей
 function refreshRelations(PDO $pdo, int $personId, array $newList, string $type): void {
-    $pdo->prepare("DELETE FROM relationships WHERE from_person_id = ? AND relation_type = ?")->execute([$personId, $type]);
-    createRelations($pdo, $personId, $newList, $type);
+    if ($type === 'parent') {
+        // Для родителей: текущий человек — ребёнок (to_person_id)
+        $pdo->prepare("DELETE FROM relationships WHERE to_person_id = ? AND relation_type = 'parent'")
+            ->execute([$personId]);
+        foreach ($newList as $parentId) {
+            $parentId = (int)$parentId;
+            if ($parentId > 0) {
+                $pdo->prepare("INSERT IGNORE INTO relationships (from_person_id, to_person_id, relation_type) VALUES (?, ?, 'parent')")
+                    ->execute([$parentId, $personId]);
+            }
+        }
+    } elseif ($type === 'spouse') {
+        // Супруги — симметричная связь
+        $pdo->prepare("DELETE FROM relationships WHERE (from_person_id = ? OR to_person_id = ?) AND relation_type = 'spouse'")
+            ->execute([$personId, $personId]);
+        foreach ($newList as $spouseId) {
+            $spouseId = (int)$spouseId;
+            if ($spouseId > 0) {
+                $pdo->prepare("INSERT IGNORE INTO relationships (from_person_id, to_person_id, relation_type) VALUES (?, ?, 'spouse')")
+                    ->execute([$personId, $spouseId]);
+            }
+        }
+    } elseif ($type === 'child') {
+        // Для детей: текущий человек — родитель (from_person_id)
+        $pdo->prepare("DELETE FROM relationships WHERE from_person_id = ? AND relation_type = 'parent'")
+            ->execute([$personId]);
+        foreach ($newList as $childId) {
+            $childId = (int)$childId;
+            if ($childId > 0) {
+                $pdo->prepare("INSERT IGNORE INTO relationships (from_person_id, to_person_id, relation_type) VALUES (?, ?, 'parent')")
+                    ->execute([$personId, $childId]);
+            }
+        }
+    }
 }

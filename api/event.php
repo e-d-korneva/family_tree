@@ -1,104 +1,142 @@
 <?php
-require_once 'includes/functions.php';
+require_once __DIR__ . '/../includes/functions.php';
 
-$events = $pdo->query("SELECT e.*, COUNT(ep.id) as participants_count 
-                       FROM events e 
-                       LEFT JOIN event_participants ep ON e.id = ep.event_id 
-                       GROUP BY e.id 
-                       ORDER BY e.event_date DESC")->fetchAll();
-?>
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <title>События — Семейное древо</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="assets/css/style.css" rel="stylesheet">
-</head>
-<body>
-<nav class="navbar navbar-dark bg-dark">
-    <div class="container">
-        <a class="navbar-brand" href="index.php">🌳 Семейное древо</a>
-        <div class="d-flex gap-2">
-            <a href="tree.php" class="btn btn-outline-light btn-sm">Дерево</a>
-            <a href="index.php" class="btn btn-outline-light btn-sm">Люди</a>
-            <a href="events.php" class="btn btn-light btn-sm">События</a>
-        </div>
-    </div>
-</nav>
+// Очищаем любой предыдущий вывод
+ob_clean();
 
-<div class="container mt-4">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h2>События</h2>
-        <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#addEventModal">+ Добавить событие</button>
-    </div>
+// Подавляем вывод warning/notice
+error_reporting(E_ERROR | E_PARSE);
+ini_set('display_errors', '0');
 
-    <div class="row">
-        <?php foreach ($events as $event): ?>
-        <div class="col-md-6 mb-3">
-            <div class="card">
-                <div class="card-body">
-                    <h5 class="card-title"><?= htmlspecialchars($event['event_type']) ?></h5>
-                    <?php if ($event['event_date']): ?>
-                        <p class="text-muted">📅 <?= htmlspecialchars($event['event_date']) ?></p>
-                    <?php endif; ?>
-                    <?php if ($event['event_place']): ?>
-                        <p>📍 <?= htmlspecialchars($event['event_place']) ?></p>
-                    <?php endif; ?>
-                    <p>👥 Участников: <?= $event['participants_count'] ?></p>
-                    <?php if ($event['description']): ?>
-                        <p><?= nl2br(htmlspecialchars($event['description'])) ?></p>
-                    <?php endif; ?>
-                    <a href="#" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#eventDetailsModal" onclick="loadEventDetails(<?= $event['id'] ?>)">Подробнее</a>
-                </div>
-            </div>
-        </div>
-        <?php endforeach; ?>
-    </div>
-</div>
+// Устанавливаем заголовок JSON
+header('Content-Type: application/json; charset=utf-8');
 
-<!-- Модалка добавления события -->
-<div class="modal fade" id="addEventModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <form class="modal-content" id="addEventForm" action="api/event.php" method="POST">
-            <div class="modal-header">
-                <h5>Добавить событие</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <input type="hidden" name="action" value="create">
-                <div class="mb-3">
-                    <label class="form-label">Тип события *</label>
-                    <input type="text" name="event_type" class="form-control" required placeholder="Например: Свадьба, Рождение">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">Дата</label>
-                    <input type="text" name="event_date" class="form-control" placeholder="1985 или 12.05.1985">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">Место</label>
-                    <input type="text" name="event_place" class="form-control" placeholder="Москва">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">Описание</label>
-                    <textarea name="description" class="form-control" rows="3"></textarea>
-                </div>
-                <hr>
-                <h6>Участники</h6>
-                <div id="eventParticipants"></div>
-                <input type="hidden" name="participants" id="participantsJson" value="[]">
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
-                <button type="submit" class="btn btn-primary">Сохранить</button>
-            </div>
-        </form>
-    </div>
-</div>
+$action = $_REQUEST['action'] ?? '';
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-<script>
-// Здесь JavaScript для работы с событиями
-</script>
-</body>
-</html>
+if ($action === 'create') {
+    try {
+        $pdo->beginTransaction();
+        
+        $stmt = $pdo->prepare("INSERT INTO events (event_type, event_date, event_place, description) VALUES (?, ?, ?, ?)");
+        $stmt->execute([
+            trim($_POST['event_type'] ?? ''),
+            $_POST['event_date'] ?: null,
+            trim($_POST['event_place'] ?? ''),
+            trim($_POST['description'] ?? '')
+        ]);
+        $eventId = (int)$pdo->lastInsertId();
+        
+        // Обработка участников
+        $participants = json_decode($_POST['participants'] ?? '[]', true);
+        if (is_array($participants)) {
+            $stmtP = $pdo->prepare("INSERT INTO event_participants (event_id, person_id, role) VALUES (?, ?, ?)");
+            foreach ($participants as $p) {
+                if (!empty($p['id'])) {
+                    $stmtP->execute([$eventId, (int)$p['id'], trim($p['role'] ?? '')]);
+                }
+            }
+        }
+        
+        $pdo->commit();
+        echo json_encode(['success' => true, 'id' => $eventId], JSON_UNESCAPED_UNICODE);
+        exit;
+    } catch (PDOException $e) {
+        $pdo->rollBack();
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+}
+
+if ($action === 'get') {
+    $id = (int)($_GET['id'] ?? 0);
+    $stmt = $pdo->prepare("SELECT * FROM events WHERE id = ?");
+    $stmt->execute([$id]);
+    $event = $stmt->fetch();
+    if (!$event) {
+        http_response_code(404);
+        echo json_encode(['error' => 'Не найдено'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    
+    $stmt = $pdo->prepare("SELECT ep.*, p.first_name, p.last_name, p.middle_name 
+                           FROM event_participants ep 
+                           JOIN persons p ON p.id = ep.person_id 
+                           WHERE ep.event_id = ?");
+    $stmt->execute([$id]);
+    $event['participants'] = $stmt->fetchAll();
+    echo json_encode($event, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($action === 'delete') {
+    $id = (int)($_POST['id'] ?? 0);
+    $pdo->prepare("DELETE FROM event_participants WHERE event_id = ?")->execute([$id]);
+    $pdo->prepare("DELETE FROM events WHERE id = ?")->execute([$id]);
+    echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// список событий для селекта в загрузке медиа
+if ($action === 'list') {
+    try {
+        $stmt = $pdo->query("SELECT id, event_type, event_date FROM events ORDER BY event_date DESC");
+        $events = $stmt->fetchAll();
+        echo json_encode($events, JSON_UNESCAPED_UNICODE);
+        exit;
+    } catch (PDOException $e) {
+        // Если таблица events не существует — возвращаем пустой массив
+        echo json_encode([], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+}
+
+if ($action === 'update') {
+    $id = (int)($_POST['id'] ?? 0);
+    if (!$id) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Не указан ID события'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    try {
+        $pdo->beginTransaction();
+
+        // 1. Обновляем основные данные события
+        $stmt = $pdo->prepare("UPDATE events SET event_type = ?, event_date = ?, event_place = ?, description = ? WHERE id = ?");
+        $stmt->execute([
+            trim($_POST['event_type'] ?? ''),
+            $_POST['event_date'] ?: null,
+            trim($_POST['event_place'] ?? ''),
+            trim($_POST['description'] ?? ''),
+            $id
+        ]);
+
+        // 2. Полностью перезаписываем участников (удаляем старых, добавляем новых)
+        $pdo->prepare("DELETE FROM event_participants WHERE event_id = ?")->execute([$id]);
+        
+        $participants = json_decode($_POST['participants'] ?? '[]', true);
+        if (is_array($participants)) {
+            $stmtP = $pdo->prepare("INSERT INTO event_participants (event_id, person_id, role) VALUES (?, ?, ?)");
+            foreach ($participants as $p) {
+                if (!empty($p['id'])) {
+                    $stmtP->execute([$id, (int)$p['id'], trim($p['role'] ?? '')]);
+                }
+            }
+        }
+
+        $pdo->commit();
+        echo json_encode(['success' => true, 'id' => $id], JSON_UNESCAPED_UNICODE);
+        exit;
+    } catch (PDOException $e) {
+        $pdo->rollBack();
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+}
+
+http_response_code(400);
+echo json_encode(['error' => 'Неизвестное действие: ' . $action], JSON_UNESCAPED_UNICODE);
+exit;
+

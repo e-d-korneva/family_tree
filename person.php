@@ -63,11 +63,13 @@ $death_date_clean = parseFlexibleDate($person['death_date'], $death_accuracy);
             <div class="row">
                 <div class="col-md-3 text-center">
                     <?php if (!empty($person['photo'])): ?>
-                        <img src="<?= htmlspecialchars($person['photo']) ?>" class="img-fluid rounded mb-2" style="max-height: 250px;">
+                        <img src="<?= htmlspecialchars($person['photo']) ?>" class="img-fluid rounded mb-2" style="max-height: 250px;" id="personMainPhoto">
+                        <button type="button" class="btn btn-sm btn-outline-danger w-100 mb-2" onclick="deletePersonPhoto(<?= $id ?>)">Удалить фото</button>
                     <?php else: ?>
-                        <div class="placeholder-photo mb-2" style="font-size: 80px;">👤</div>
+                        <div class="placeholder-photo mb-2" style="font-size: 80px;" id="personMainPhoto"> 👤 </div>
                     <?php endif; ?>
-                    <form action="api/media.php" method="POST" enctype="multipart/form-data" class="mt-2">
+                    
+                    <form action="api/media.php" method="POST" enctype="multipart/form-data" class="mt-2" id="uploadPhotoForm">
                         <input type="hidden" name="action" value="upload_photo">
                         <input type="hidden" name="person_id" value="<?= $id ?>">
                         <input type="file" name="photo" accept="image/*" class="form-control form-control-sm" required>
@@ -208,6 +210,92 @@ $death_date_clean = parseFlexibleDate($person['death_date'], $death_accuracy);
 
 
     <!-- Сюда необходимо добавить медиатеку и события (только то где упоминается этот человек) (добавлять и удалять медиа и события (только человека из события)) -->
+
+    <!-- Медиафайлы -->
+    <div class="card mt-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong>Медиафайлы</strong>
+            <button class="btn btn-sm btn-outline-primary" data-bs-toggle="collapse" data-bs-target="#mediaUploadBlock">+ Загрузить</button>
+        </div>
+        <div class="card-body">
+            <div class="collapse mb-3" id="mediaUploadBlock">
+                <form action="api/media.php" method="POST" enctype="multipart/form-data" class="border p-3 rounded">
+                    <input type="hidden" name="action" value="upload_media">
+                    <input type="hidden" name="person_id" value="<?= $id ?>">
+                    <div class="row g-2">
+                        <div class="col-md-6">
+                            <input type="file" name="files[]" class="form-control" multiple accept="image/*,video/*,audio/*">
+                        </div>
+                        <div class="col-md-4">
+                            <input type="text" name="caption" class="form-control" placeholder="Подпись (необязательно)">
+                        </div>
+                        <div class="col-md-2">
+                            <button type="submit" class="btn btn-primary w-100">Загрузить</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            
+            <?php if (!empty($media)): ?>
+                <div class="row">
+                    <?php foreach ($media as $m): ?>
+                        <div class="col-md-3 mb-3">
+                            <div class="card h-100">
+                                <?php if ($m['file_type'] === 'photo'): ?>
+                                    <img src="<?= htmlspecialchars($m['thumb_path'] ?: $m['file_path']) ?>" 
+                                        class="card-img-top" style="cursor:pointer" 
+                                        onclick="window.open('<?= htmlspecialchars($m['file_path']) ?>')">
+                                <?php elseif ($m['file_type'] === 'video'): ?>
+                                    <video src="<?= htmlspecialchars($m['file_path']) ?>" class="card-img-top" controls></video>
+                                <?php elseif ($m['file_type'] === 'audio'): ?>
+                                    <div class="p-3 text-center">🎵 <audio src="<?= htmlspecialchars($m['file_path']) ?>" controls class="w-100 mt-2"></audio></div>
+                                <?php else: ?>
+                                    <div class="p-3 text-center">📄 <?= htmlspecialchars(basename($m['file_path'])) ?></div>
+                                <?php endif; ?>
+                                <?php if (!empty($m['caption'])): ?>
+                                    <div class="card-body p-2"><small class="text-muted"><?= htmlspecialchars($m['caption']) ?></small></div>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php else: ?>
+                <p class="text-muted mb-0">Медиафайлы не загружены</p>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <!-- События -->
+    <div class="card mt-4">
+        <div class="card-header">
+            <strong>События с участием</strong>
+        </div>
+        <div class="card-body">
+            <?php if (!empty($events)): ?>
+                <div class="list-group">
+                    <?php foreach ($events as $ev): ?>
+                        <div class="list-group-item d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong><?= htmlspecialchars($ev['event_type']) ?></strong>
+                                <?php if (!empty($ev['event_date'])): ?>
+                                    <small class="text-muted ms-2">📅 <?= htmlspecialchars($ev['event_date']) ?></small>
+                                <?php endif; ?>
+                                <?php if (!empty($ev['event_place'])): ?>
+                                    <small class="text-muted ms-2">📍 <?= htmlspecialchars($ev['event_place']) ?></small>
+                                <?php endif; ?>
+                                <?php if (!empty($ev['role'])): ?>
+                                    <span class="badge bg-info text-dark ms-2"><?= htmlspecialchars($ev['role']) ?></span>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php else: ?>
+                <p class="text-muted mb-0">Этот человек не участвует ни в одном событии</p>
+            <?php endif; ?>
+        </div>
+    </div>
+
 
 
     <!-- Кнопки управления -->
@@ -538,6 +626,37 @@ document.addEventListener('DOMContentLoaded', function() {
     toggleRelOptions();
     toggleSpouseFields();
 });
+
+
+// ====== УДАЛЕНИЕ ФОТО ПРОФИЛЯ ======
+async function deletePersonPhoto(personId) {
+    if (!confirm('Вы уверены, что хотите удалить эту фотографию? Действие необратимо.')) {
+        return;
+    }
+    
+    const fd = new FormData();
+    fd.append('action', 'delete_photo');
+    fd.append('person_id', personId);
+    
+    try {
+        const res = await fetch('api/person.php', { 
+            method: 'POST', 
+            body: fd,
+            cache: 'no-store'
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+            // Перезагружаем страницу, чтобы обновить интерфейс (показать плейсхолдер вместо фото)
+            window.location.reload();
+        } else {
+            alert('Ошибка: ' + (data.error || 'Не удалось удалить фото'));
+        }
+    } catch (err) {
+        console.error('Ошибка сети:', err);
+        alert('Ошибка сети: ' + err.message);
+    }
+}
 </script>
 </body>
 </html>

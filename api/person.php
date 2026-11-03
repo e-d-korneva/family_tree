@@ -151,3 +151,37 @@ if ($action === 'get') {
     $p['status'] = getLifeStatus($p);
     jsonResponse($p);
 }
+
+if ($action === 'delete_photo') {
+    $personId = (int)($_POST['person_id'] ?? 0);
+    if (!$personId) {
+        jsonResponse(['success' => false, 'error' => 'Не указан ID человека'], 400);
+    }
+    
+    // Получаем текущий путь к фото
+    $stmt = $pdo->prepare("SELECT photo FROM persons WHERE id = ?");
+    $stmt->execute([$personId]);
+    $person = $stmt->fetch();
+    
+    if ($person && !empty($person['photo'])) {
+        $photoPath = __DIR__ . '/../' . $person['photo'];
+        
+        // Удаляем основной файл
+        if (file_exists($photoPath)) {
+            @unlink($photoPath);
+        }
+        
+        // Пытаемся удалить миниатюру, если она существует
+        $pathInfo = pathinfo($person['photo']);
+        $thumbPath = __DIR__ . '/../uploads/thumbs/thumb_' . $pathInfo['basename'];
+        if (file_exists($thumbPath)) {
+            @unlink($thumbPath);
+        }
+    }
+    
+    // Обнуляем поле photo в базе данных
+    $stmt = $pdo->prepare("UPDATE persons SET photo = NULL WHERE id = ?");
+    $stmt->execute([$personId]);
+    
+    jsonResponse(['success' => true]);
+}
